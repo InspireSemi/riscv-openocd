@@ -2199,161 +2199,154 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "hart2 mtime_lower %x", sbdata);
 
-	{
-		FILE *loader;
-		char *line = NULL; // Buffer to hold each line
-		size_t len = 0;
-		ssize_t read;     // The number of characters read (or -1 on failure)
+	FILE *inputfile;
+	char fname[25];
+	uint32_t load, param, stack,  sptr;
+	char label_buffer[100]; // Buffer to temporarily store the labels
 
-		// char binary[50];
-		// char load[50];
-		// char param[50];
-		//unsigned int load_addr;
-		//unsigned int param_addr;
-		//int lines = 3;
-		loader = fopen("./loader.txt", "r");
-		if (!loader)
-		{
-			fprintf(stderr, "Unable to open file");
-			exit(0);
-		}
-
-		// Read lines until the end of the file is reached or an error occurs
-		while ((read = getline(&line, &len, loader)) != -1) {
-			// Process the line (e.g., print it)
-			printf("Retrieved line of length %zu:\n", read);
-			printf("%s", line);
-		}
-
-
- 		// while (fgets(line, sizeof(line), loader) != NULL) 
-		// {
-        // 	// Parse the line using sscanf
-		// 	if (lines == 3)
-		// 	{
-        // 		sscanf(line, "%s", binary);
-		// 		lines--;
-		// 	}
-		// 	if (lines == 2)
-		// 	{
-        // 		sscanf(line, "%s", load);
-		// 		lines--;
-		// 	}
-		// 	if (lines == 1)
-		// 	{
-        // 		sscanf(line, "%s", param);
-		// 		lines--;
-		// 	}				
-        // }
-		// if (lines !=0)
-		// {
-		// 	LOG_TARGET_DEBUG(target, "Error Reading Parameters %x", lines);
-		// 	exit(0);
-		// }
-		// LOG_TARGET_DEBUG(target, "Parameters %s, %s %s", binary, load, param);
-		
-		fclose(loader);
-
-    }		
-
-	{
-		FILE *file;
-		char *buffer;
-		uint32_t * wbuf;
-		unsigned long fileLen;
-		uint32_t words;
-		uint32_t rem;
-		volatile uint32_t y;
-		size_t temp;
-
-
-		SBACCESS_32_INC;
-		//Open file
-		file = fopen("nw1_uart_test.bin", "rb");
-		if (!file)
-		{
-			fprintf(stderr, "Unable to open file");
-			exit(0);
-		}
-		
-		//Get file length
-		fseek(file, 0, SEEK_END);
-		fileLen=ftell(file);
-		fseek(file, 0, SEEK_SET);
-
-		//Allocate memory
-		buffer=(char *)malloc(fileLen+1);
-		if (!buffer)
-		{
-			fprintf(stderr, "Memory error!");
-			fclose(file);
-			exit(0);
-		}
-
-		//Read file contents into buffer
-		temp = fread(buffer, fileLen, 1, file);
-		if(temp != 1)
-			printf("Misread\n");		
-		fclose(file);
-
-		words = fileLen/4;
-		rem = fileLen%4; // Check for any extra bytes.. 
-		wbuf = (uint32_t *)buffer;
-
-
-		dm_write(target, DM_SBADDRESS1, 0x00);
-		dm_write(target, DM_SBADDRESS0, 0x20000);
-		for (y=0; y<words; y++)
-		{ 
-			sbdata = *(wbuf);
-			wbuf++;
-			printf("Data %x Word %x\n", sbdata, y);
-			// Write to SRAM
-			dm_write(target, DM_SBDATA0, sbdata);
-		}		
-
-
-		if (rem != 0)
-		{
-			sbdata = 0;
-			while(rem != 0)
-			{
-				sbdata = sbdata | *((uint8_t *)wbuf);
-				(uint8_t *)wbuf++;
-				rem--;
-			}
-
-		}
-
-		SBACCESS_32_READDATA_INC;
-		dm_write(target, DM_SBADDRESS1, 0x00);
-		dm_write(target, DM_SBADDRESS0, 0x20000);
-
-		// Dummy read ..  it returns data, before it does the read from sbaddress	
-		dm_read(target, &sbdata, DM_SBDATA0);
-		for (y=0;y<0x10;y++)
-		{
-			dm_read(target, &sbdata, DM_SBDATA0);
-			LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);			
-		}
-
-		free(buffer);
+	// Open the file in read mode ("r")
+	inputfile = fopen("loader.txt", "r");
+	if (inputfile == NULL) {
+		perror("Unable to open file!");
+		exit(EXIT_FAILURE);
 	}
+
+	// Read the parameters using fscanf
+	// %s reads the string label (e.g., "rho_0")
+	// %*s skips the '=' sign (optional, depends on file format)
+	// %lf reads the double value
+	
+	// Filename
+	if (fscanf(inputfile, "%s = %s", label_buffer, fname) != 2) {
+		fprintf(stderr, "Error reading filename\n");
+	}
+	// load addr
+	if (fscanf(inputfile, "%s = %x", label_buffer, &load) != 2) {
+		fprintf(stderr, "Error reading laod addr\n");
+	}
+	// param addr
+	if (fscanf(inputfile, "%s = %x", label_buffer, &param) != 2) {
+		fprintf(stderr, "Error reading param addr\n");
+	}
+
+	// stack addr
+	if (fscanf(inputfile, "%s = %x", label_buffer, &stack) != 2) {
+		fprintf(stderr, "Error reading stack addr\n");
+	}	
+
+	// status pointer
+	if (fscanf(inputfile, "%s = %x", label_buffer, &sptr) != 2) {
+		fprintf(stderr, "Error reading sptr addr\n");
+	}
+
+	// Close the file
+	fclose(inputfile);
+
+	// Print the read parameters (for verification)
+	printf("fname: %s\n", fname);
+	printf("load: %x\n", load);
+	printf("param: %x\n", param);
+	printf("stack: %x\n", stack);
+	printf("sptr: %x\n", sptr);		
+
+
+
+	FILE *file;
+	char *buffer;
+	uint32_t * wbuf;
+	unsigned long fileLen;
+	uint32_t words;
+	uint32_t rem;
+	volatile uint32_t y;
+	size_t temp;
+
+
+	SBACCESS_32_INC;
+	//Open file
+	file = fopen(fname, "rb");
+	if (!file)
+	{
+		fprintf(stderr, "Unable to open file");
+		exit(0);
+	}
+	
+	//Get file length
+	fseek(file, 0, SEEK_END);
+	fileLen=ftell(file);
+	fseek(file, 0, SEEK_SET);
+
+	//Allocate memory
+	buffer=(char *)malloc(fileLen+1);
+	if (!buffer)
+	{
+		fprintf(stderr, "Memory error!");
+		fclose(file);
+		exit(0);
+	}
+
+	//Read file contents into buffer
+	temp = fread(buffer, fileLen, 1, file);
+	if(temp != 1)
+		printf("Misread\n");		
+	fclose(file);
+
+	words = fileLen/4;
+	rem = fileLen%4; // Check for any extra bytes.. 
+	wbuf = (uint32_t *)buffer;
+
+
+	dm_write(target, DM_SBADDRESS1, 0x00);
+	dm_write(target, DM_SBADDRESS0, load);
+	for (y=0; y<words; y++)
+	{ 
+		sbdata = *(wbuf);
+		wbuf++;
+		printf("Data %x Word %x\n", sbdata, y);
+		// Write to SRAM
+		dm_write(target, DM_SBDATA0, sbdata);
+	}		
+
+
+	if (rem != 0)
+	{
+		sbdata = 0;
+		while(rem != 0)
+		{
+			sbdata = sbdata | *((uint8_t *)wbuf);
+			(uint8_t *)wbuf++;
+			rem--;
+		}
+
+	}
+
+	SBACCESS_32_READDATA_INC;
+	dm_write(target, DM_SBADDRESS1, 0x00);
+	dm_write(target, DM_SBADDRESS0, load);
+
+	// Dummy read ..  it returns data, before it does the read from sbaddress	
+	dm_read(target, &sbdata, DM_SBDATA0);
+	for (y=0;y<0x10;y++)
+	{
+		dm_read(target, &sbdata, DM_SBDATA0);
+		LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);			
+	}
+
+	free(buffer);
 
 
 	SBACCESS_64_INC;
 	dm_write(target, DM_SBADDRESS1, 0x00);
-	dm_write(target, DM_SBADDRESS0, 0x2A000);
-	dm_write(target, DM_SBDATA1, 0x0000); // Status ptr
+	dm_write(target, DM_SBADDRESS0, param);
+	dm_write(target, DM_SBDATA1, 0x0000); // Upper Data 
 	dm_write(target, DM_SBDATA0, 0x0000); // Args ptr
-	dm_write(target, DM_SBDATA0, 0x20000); // Jump Addr
-	dm_write(target, DM_SBDATA0, 0x28000); // Stack 
-	dm_write(target, DM_SBDATA0, 0x29000); // Status ptr
+	dm_write(target, DM_SBDATA0, load); // Jump Addr
+	dm_write(target, DM_SBDATA0, stack); // Stack 
+	dm_write(target, DM_SBDATA0, sptr); // Status ptr
 
 	SBACCESS_64;
 	dm_write(target, DM_SBADDRESS1, 0x00);
-	dm_write(target, DM_SBADDRESS0, 0x29000);
-	dm_write(target, DM_SBDATA1, 0x0000); // Status ptr
+	dm_write(target, DM_SBADDRESS0, sptr);
+	dm_write(target, DM_SBDATA1, 0x0000); // Upper Data
 	dm_write(target, DM_SBDATA0, 0x0001); // Status ptr
 
 	dm_read(target, &sbaccess_reg, DM_SBCS);
@@ -2365,7 +2358,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 	SBACCESS_64_READDATA_INC;
 	dm_write(target, DM_SBADDRESS1, 0x00);
-	dm_write(target, DM_SBADDRESS0, 0x2A000);
+	dm_write(target, DM_SBADDRESS0, param);
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "block 0 %x", sbdata);
 	dm_read(target, &sbdata, DM_SBDATA0);
