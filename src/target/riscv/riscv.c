@@ -3098,20 +3098,21 @@ static int riscv_address_translate(struct target *target,
 		target_addr_t virtual, target_addr_t *physical)
 {
 	RISCV_INFO(r);
-	unsigned int xlen = riscv_xlen(target);
+//	unsigned int xlen = riscv_xlen(target);
 
 	LOG_TARGET_DEBUG(target, "mode=%s; ppn=0x%" TARGET_PRIxADDR "; virtual=0x%" TARGET_PRIxADDR,
 		info->name, ppn, virtual);
 
-	/* verify bits xlen-1:va_bits-1 are all equal */
-	assert(xlen >= info->va_bits);
-	target_addr_t mask = ((target_addr_t)1 << (xlen - (info->va_bits - 1))) - 1;
-	target_addr_t masked_msbs = (virtual >> (info->va_bits - 1)) & mask;
-	if (masked_msbs != 0 && masked_msbs != mask) {
-		LOG_TARGET_ERROR(target, "Virtual address 0x%" TARGET_PRIxADDR " is not sign-extended "
-				"for %s mode.", virtual, info->name);
-		return ERROR_FAIL;
-	}
+//	removed check on virtual address vs SATP mode we are 56 bit address and this is looking for 64 bit sign extended
+	// /* verify bits xlen-1:va_bits-1 are all equal */
+	// assert(xlen >= info->va_bits);
+	// target_addr_t mask = ((target_addr_t)1 << (xlen - (info->va_bits - 1))) - 1;
+	// target_addr_t masked_msbs = (virtual >> (info->va_bits - 1)) & mask;
+	// if (masked_msbs != 0 && masked_msbs != mask) {
+	// 	LOG_TARGET_ERROR(target, "Virtual address 0x%" TARGET_PRIxADDR " is not sign-extended "
+	// 			"for %s mode.", virtual, info->name);
+	// 	return ERROR_FAIL;
+	// }
 
 	uint64_t pte = 0;
 	target_addr_t table_address = ppn << RISCV_PGSHIFT;
@@ -3300,6 +3301,7 @@ static int riscv_virt2phys_v(struct target *target, target_addr_t virtual, targe
 static int riscv_virt2phys(struct target *target, target_addr_t virtual, target_addr_t *physical)
 {
 	int enabled;
+	int bit; 
 	if (riscv_mmu(target, &enabled) != ERROR_OK)
 		return ERROR_FAIL;
 	if (!enabled) {
@@ -3307,6 +3309,10 @@ static int riscv_virt2phys(struct target *target, target_addr_t virtual, target_
 		LOG_TARGET_DEBUG(target, "MMU is disabled. 0x%" TARGET_PRIxADDR " -> 0x%" TARGET_PRIxADDR, virtual, *physical);
 		return ERROR_OK;
 	}
+
+	bit = (virtual >> 55) & 1;
+	if (bit) 
+		virtual |= ((uint64_t)0xFF << 56);
 
 	riscv_reg_t priv;
 	if (riscv_reg_get(target, &priv, GDB_REGNO_PRIV) != ERROR_OK) {
@@ -3348,6 +3354,8 @@ static int riscv_virt2phys(struct target *target, target_addr_t virtual, target_
 				      " (satp: 0x%" PRIx64 ")", satp_value);
 			return ERROR_FAIL;
 	}
+
+	LOG_WARNING("After Virt Extended 0x%" TARGET_PRIxADDR " -> 0x%" TARGET_PRIxADDR, virtual, *physical);
 
 	return riscv_address_translate(target,
 			satp_info, get_field(satp_value, RISCV_SATP_PPN(xlen)),

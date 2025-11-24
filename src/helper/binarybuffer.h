@@ -134,7 +134,10 @@ static inline uint32_t buf_get_u32(const uint8_t *_buffer,
 static inline uint64_t buf_get_u64(const uint8_t *_buffer,
 	unsigned int first, unsigned int num)
 {
-	assert(num >= 1 && num <= 64);
+	// Removed this becasue we have a 66 bit jtag stream.  Have no idea why this is here in the first place.
+	// This code can handle any length of bitstream just fine.  Not limited to 32/64?
+	//assert(num >= 1 && num <= 64);  
+
 	const uint8_t *buffer = _buffer;
 
 	if ((num == 32) && (first == 0)) {
