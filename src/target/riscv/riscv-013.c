@@ -1829,7 +1829,7 @@ static int wait_for_idle_if_needed(struct target *target)
 
 #define RELEASE_HART2
 //#define SRAM_READ
-//#define HART2_HALT
+//#define HART_HALT
 
 static int reset_dm(struct target *target)
 {
@@ -2202,7 +2202,12 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	FILE *inputfile;
 	char fname[25];
 	uint32_t load, param, stack,  sptr;
+	uint32_t flash;
+	uint32_t flash_addr;
+	char flash_name[25];
 	char label_buffer[100]; // Buffer to temporarily store the labels
+	uint32_t flash_sz;
+	uint32_t flash_args;
 
 	// Open the file in read mode ("r")
 	inputfile = fopen("loader.txt", "r");
@@ -2211,11 +2216,11 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 		exit(EXIT_FAILURE);
 	}
 
-	// Read the parameters using fscanf
-	// %s reads the string label (e.g., "rho_0")
-	// %*s skips the '=' sign (optional, depends on file format)
-	// %lf reads the double value
-	
+	// Read the parameters using fscanf	
+	// is this a program a flash device?
+	if (fscanf(inputfile, "%s = %x", label_buffer, &flash) != 2) {
+		fprintf(stderr, "Error reading filename\n");
+	}
 	// Filename
 	if (fscanf(inputfile, "%s = %s", label_buffer, fname) != 2) {
 		fprintf(stderr, "Error reading filename\n");
@@ -2238,6 +2243,27 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	if (fscanf(inputfile, "%s = %x", label_buffer, &sptr) != 2) {
 		fprintf(stderr, "Error reading sptr addr\n");
 	}
+	if(flash == 1)
+	{
+		// flash image addr
+		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_addr) != 2) {
+			fprintf(stderr, "Error reading laod addr\n");
+		}
+		// Filename
+		if (fscanf(inputfile, "%s = %s", label_buffer, flash_name) != 2) {
+			fprintf(stderr, "Error reading filename\n");
+		}
+		// File Size
+		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_sz) != 2) {
+			fprintf(stderr, "Error reading file size\n");
+		}
+		// Args Pointer
+		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_args) != 2) {
+			fprintf(stderr, "Error reading file args\n");
+		}
+	}
+	else
+		flash_args = 0xDEADBEEF;
 
 	// Close the file
 	fclose(inputfile);
@@ -2247,7 +2273,14 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	printf("load: %x\n", load);
 	printf("param: %x\n", param);
 	printf("stack: %x\n", stack);
-	printf("sptr: %x\n", sptr);		
+	printf("sptr: %x\n", sptr);	
+	if(flash == 1)	
+	{
+		printf("Flash File: %s\n", flash_name);
+		printf("Flash Addr: %x\n", flash_addr);	
+		printf("Flash Size: %x\n", flash_sz);
+		printf("args: %x\n", flash_args);	
+	}
 
 
 
@@ -2260,7 +2293,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	volatile uint32_t y;
 	size_t temp;
 
-
+// Read Bianry to run
 	SBACCESS_32_INC;
 	//Open file
 	file = fopen(fname, "rb");
@@ -2319,26 +2352,111 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 	}
 
-	SBACCESS_32_READDATA_INC;
-	dm_write(target, DM_SBADDRESS1, 0x00);
-	dm_write(target, DM_SBADDRESS0, load);
+	// SBACCESS_32_READDATA_INC;
+	// dm_write(target, DM_SBADDRESS1, 0x00);
+	// dm_write(target, DM_SBADDRESS0, load);
 
-	// Dummy read ..  it returns data, before it does the read from sbaddress	
-	dm_read(target, &sbdata, DM_SBDATA0);
-	for (y=0;y<0x10;y++)
-	{
-		dm_read(target, &sbdata, DM_SBDATA0);
-		LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);			
-	}
+	// // Dummy read ..  it returns data, before it does the read from sbaddress	
+	// dm_read(target, &sbdata, DM_SBDATA0);
+	// for (y=0;y<0x10;y++)
+	// {
+	// 	dm_read(target, &sbdata, DM_SBDATA0);
+	// 	LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);			
+	// }
 
 	free(buffer);
+
+	if (flash == 1)
+	{
+		SBACCESS_32_INC;
+		//Open file
+		file = fopen(flash_name, "rb");
+		if (!file)
+		{
+			fprintf(stderr, "Unable to open file");
+			exit(0);
+		}
+		
+		//Get file length
+		fseek(file, 0, SEEK_END);
+		fileLen=ftell(file);
+		fseek(file, 0, SEEK_SET);
+
+		//Allocate memory
+		buffer=(char *)malloc(fileLen+1);
+		if (!buffer)
+		{
+			fprintf(stderr, "Memory error!");
+			fclose(file);
+			exit(0);
+		}
+
+		//Read file contents into buffer
+		temp = fread(buffer, fileLen, 1, file);
+		if(temp != 1)
+			printf("Misread\n");		
+		fclose(file);
+
+		words = fileLen/4;
+		rem = fileLen%4; // Check for any extra bytes.. 
+		wbuf = (uint32_t *)buffer;
+
+
+		dm_write(target, DM_SBADDRESS1, 0x00);
+		dm_write(target, DM_SBADDRESS0, flash_addr);
+		for (y=0; y<words; y++)
+		{ 
+			sbdata = *(wbuf);
+			wbuf++;
+			printf("Data %x Word %x\n", sbdata, y);
+			// Write to SRAM
+			dm_write(target, DM_SBDATA0, sbdata);
+		}		
+
+
+		if (rem != 0)
+		{
+			sbdata = 0;
+			while(rem != 0)
+			{
+				sbdata = sbdata | *((uint8_t *)wbuf);
+				(uint8_t *)wbuf++;
+				rem--;
+			}
+
+		}
+
+		SBACCESS_32_READDATA_INC;
+		dm_write(target, DM_SBADDRESS1, 0x00);
+		dm_write(target, DM_SBADDRESS0, flash_addr);
+
+		// Dummy read ..  it returns data, before it does the read from sbaddress	
+		dm_read(target, &sbdata, DM_SBDATA0);
+		for (y=0;y<0x10;y++)
+		{
+			dm_read(target, &sbdata, DM_SBDATA0);
+			LOG_TARGET_DEBUG(target, "flash %x word %x", sbdata, y);			
+		}
+
+		free(buffer);
+
+		//*(uint32_t *)(&param) = flash_sz;
+
+		SBACCESS_64;
+		dm_write(target, DM_SBADDRESS1, 0x00);
+		dm_write(target, DM_SBADDRESS0, flash_args);
+		dm_write(target, DM_SBDATA1, 0x0000); // Upper Data
+		dm_write(target, DM_SBDATA0, flash_sz); // Flash size as a param to app
+
+	}
+
 
 
 	SBACCESS_64_INC;
 	dm_write(target, DM_SBADDRESS1, 0x00);
 	dm_write(target, DM_SBADDRESS0, param);
 	dm_write(target, DM_SBDATA1, 0x0000); // Upper Data 
-	dm_write(target, DM_SBDATA0, 0x0000); // Args ptr
+	dm_write(target, DM_SBDATA0, flash_args); // Args ptr
 	dm_write(target, DM_SBDATA0, load); // Jump Addr
 	dm_write(target, DM_SBDATA0, stack); // Stack 
 	dm_write(target, DM_SBDATA0, sptr); // Status ptr
@@ -2387,26 +2505,53 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 #define REG(x)		(x<<0)
 #define DPC			0x7B1
 #define HART_T0			0x1005
+#define HART_T1			0x1006
 #define HART_T2			0x1007
 #define HART_T3			0x101C
 #define HART_T4			0x101D
 #define HART_T5			0x101E
 #define HART_T6			0x101F
 #define HART_A0			0x100A
+#define HART_A1			0x100B
+#define HART_A2			0x100C
+#define HART_A3			0x100D
+#define HART_A4			0x100E
+#define HART_A5			0x100F
+#define HART_A6			0x1010
+#define HART_A7			0x1011
+#define HART_S0			0x1008
+#define HART_S1			0x1009
+#define HART_S2			0x1012
+#define HART_S3			0x1013
+#define HART_S4			0x1014
+#define HART_S5			0x1015
+#define HART_S6			0x1016
+#define HART_S7			0x1017
+#define HART_S8			0x1018
+#define HART_S9			0x1019
+#define HART_S10		0x101A
+#define HART_S11		0x101B
+#define HART_SP			0x1002
+#define HART_GP			0x1003
+#define HART_TP			0x1004
 
-	LOG_TARGET_DEBUG(target, "Hart2 Enable DM");
+
+	uint32_t hart = 2;
+	uint32_t hart_core_reg = THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2);
+
+	LOG_TARGET_DEBUG(target, "Hart Enable DM");
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_CONTROL));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
 	dm_write(target, DM_SBDATA0, 0x0001);
 
 	SBACCESS_32_READADDR;
-	LOG_TARGET_DEBUG(target, "Hart2 DM next_dm");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | HART2_NEXTDM));
+	LOG_TARGET_DEBUG(target, "Hart DM next_dm");
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | HART2_NEXTDM));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "next_dm %x", sbdata);
 
-	LOG_TARGET_DEBUG(target, "Hart2 DM Status");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_STATUS));
+	LOG_TARGET_DEBUG(target, "Hart DM Status");
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_STATUS));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "status %x", sbdata);
 
@@ -2414,22 +2559,53 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	SBACCESS_32;
 	sbdata = 0;
 	LOG_TARGET_DEBUG(target, "SWIRQ to Hart2");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | THUNDERBIRD_CORE_SW_IRQ_OFFSET));
-	dm_write(target, DM_SBDATA0, 0x2A000);
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | THUNDERBIRD_CORE_SW_IRQ_OFFSET));
+	dm_write(target, DM_SBDATA0, param);
 
 	dm_read(target, &sbaccess_reg, DM_SBCS);
 	LOG_TARGET_DEBUG(target, "sbaccess_reg1 %x", sbaccess_reg);
 
 	//Delay to let Hart2 run some
-	for(x=0;x<0x100;x++);
+	//for(x=0;x<0x100;x++);
 
+	char choice;
+	bool halt = false;
 
+    while (1) {
 
-#ifdef HART2_HALT
+        printf("--- Halt Menu ---\n");
+        printf("1. Halt Core 2\n");
+        printf("2. Exit\n");
+        printf("Enter your choice: ");
 
-	LOG_TARGET_DEBUG(target, "Hart2 Send Halt Signal");
+        choice = getc(stdin);
+
+		// Consume the newline character left in the buffer after pressing Enter
+        if (choice != EOF && choice != '\n') {
+            // Read and ignore any remaining characters on the line
+            while (getc(stdin) != '\n' && choice != EOF);
+        }
+
+        switch (choice) {
+            case '1':
+                printf("\nHalting Hart2\n");
+				halt = true;
+                break;
+            case '2':
+                printf("\nExiting\n");
+                exit(0); // Exit the program
+            default:
+                printf("\nInvalid choice. Press any key to try again.\n");
+                getc(stdin);
+                break;
+        }
+		if (halt)
+			break;
+    }
+
+	LOG_TARGET_DEBUG(target, "Hart Send Halt Signal");
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_CONTROL));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
 	dm_write(target, DM_SBDATA0, 0x80000001);
 
 	//Delay for Halt to take affect
@@ -2437,7 +2613,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 	SBACCESS_32_READDATA_ADDR;
 	LOG_TARGET_DEBUG(target, "Hart2 DM Status");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_STATUS));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_STATUS));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "status %x", sbdata);
 	x = 120;
@@ -2454,126 +2630,447 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	// We are halted now
 	LOG_TARGET_DEBUG(target, "Hart2 DPC");
 	SBACCESS_32_READADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CS));	
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CS));	
 	dm_read(target, &sbdata, DM_SBDATA0);
-	LOG_TARGET_DEBUG(target, "Hart2 Abstract CS %x", sbdata);
+	LOG_TARGET_DEBUG(target, "Hart Abstract CS %x", sbdata);
 	
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | DPC );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "dpc lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "dpc upper %x", sbdata);
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
-	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A0 );
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_SP );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "sp lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "sp upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_GP );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "gp lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "gp upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_TP );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "tp lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "tp upper %x", sbdata);
+
+
+// AX registers
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "a0 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "a0 upper %x", sbdata);
 
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A1 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a1 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a1 upper %x", sbdata);
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A2 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a2 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a2 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A3 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a3 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a3 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A4 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a4 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a4 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A5 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a5 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a5 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A6 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a6 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a6 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_A7 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a7 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "a7 upper %x", sbdata);
+
+
+//TX Registers
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T0 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t0 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t0 upper %x", sbdata);
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T1 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "t1 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "t1 upper %x", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T2 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t2 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t2 upper %x", sbdata);
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T3 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t3 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t3 upper %x", sbdata);
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T4 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t4 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t4 upper %x", sbdata);
 
 
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T5 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t5 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t5 upper %x", sbdata);
 
-
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
 	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_T6 );
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t6 lwr %x", sbdata);
 
 	SBACCESS_32_READDATA_ADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "t6 upper %x", sbdata);	
 
-#endif
+// SX Registers
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S0 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s0 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s0 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S1 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s1 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s1 upper %x", sbdata);		
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S2 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s2 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s2 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S3 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s3 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s3 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S4 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s4 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s4 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S5 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s5 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s5 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S6 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s6 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s6 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S7 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s7 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s7 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S8 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s8 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s8 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S9 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s9 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s9 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S10 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s10 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s10 upper %x", sbdata);	
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | HART_S11 );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s11 lwr %x", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	LOG_TARGET_DEBUG(target, "s11 upper %x", sbdata);	
 
 	// SBACCESS_32_READDATA;
 	// dm_write(target, DM_SBADDRESS1, 0x00);
