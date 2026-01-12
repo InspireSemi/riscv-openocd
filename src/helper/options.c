@@ -44,6 +44,7 @@ static const struct option long_options[] = {
 	{"search",		required_argument,		NULL,			's'},
 	{"log_output",	required_argument,		NULL,			'l'},
 	{"command",		required_argument,		NULL,			'c'},
+	{"paramfile",   required_argument,		NULL,			'p'},
 	{NULL, 0, NULL, 0}
 };
 
@@ -262,6 +263,8 @@ static void add_default_dirs(void)
 	free(bin2data);
 }
 
+char *param_file = NULL;
+
 int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 {
 	int c;
@@ -270,7 +273,7 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		/* getopt_long stores the option index here. */
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hvd::l:f:s:c:", long_options, &option_index);
+		c = getopt_long(argc, argv, "hvd::l:f:s:c:p:", long_options, &option_index);
 
 		/* Detect the end of the options. */
 		if (c == -1)
@@ -284,6 +287,9 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 				break;
 			case 'v':		/* --version | -v */
 				version_flag = 1;
+				break;
+			case 'p':
+				param_file = optarg;
 				break;
 			case 'f':		/* --file | -f */
 			{

@@ -1831,6 +1831,8 @@ static int wait_for_idle_if_needed(struct target *target)
 //#define SRAM_READ
 //#define HART_HALT
 
+extern char *param_file;
+
 static int reset_dm(struct target *target)
 {
 	/* TODO: This function returns an error when a DMI operation fails.
@@ -2215,8 +2217,10 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	uint32_t flash_sz;
 	uint32_t flash_args;
 
+	printf("Using Param file %s\n", param_file);
+	
 	// Open the file in read mode ("r")
-	inputfile = fopen("loader.txt", "r");
+	inputfile = fopen((const char *)param_file, "r");
 	if (inputfile == NULL) {
 		perror("Unable to open file!");
 		exit(EXIT_FAILURE);
