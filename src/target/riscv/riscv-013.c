@@ -1832,6 +1832,7 @@ static int wait_for_idle_if_needed(struct target *target)
 //#define HART_HALT
 
 extern char *param_file;
+void halt_dump(struct target *target, uint32_t hart_core_reg );
 
 static int reset_dm(struct target *target)
 {
@@ -2617,21 +2618,19 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	// //LOG_TARGET_DEBUG(target, "sbaccess_reg1 %x", sbaccess_reg);
 	// printf("sbaccess_reg1 %x\n", sbaccess_reg);
 
-#if 0
-	//Delay to let Hart2 run some
-	for(x=0;x<0x2000;x++);
-#else
+	char choice;
+	bool halt = false;
+	bool resume = false;
+
+halt_menu:
 
 	if (flash == 1)
 	{
-		printf("Image Flashing Done.. Please Power Cycle the Board!\n");
-		printf("\nExiting\n");
+		printf("Image Flashing Started ... Observe Minicom for completion..\n");
 		exit(0); // Exit the program
 	}
 	else
 	{
-		char choice;
-		bool halt = false;
 		while (1) {
 			printf("--- Halt Menu ---\n");
 			printf("1. Halt Core 2\n");
@@ -2663,9 +2662,100 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 				break;
 		}
 	}
-#endif
+	
+	while(1)
+	{
+		if (halt == false)
+		{
+			printf("--- Resume Menu ---\n");
+			printf("1. Resume Core 2\n");
+			printf("2. Exit\n");
+			printf("Enter your choice: ");
+
+			choice = getc(stdin);
+
+			// Consume the newline character left in the buffer after pressing Enter
+			if (choice != EOF && choice != '\n') {
+				// Read and ignore any remaining characters on the line
+				while (getc(stdin) != '\n' && choice != EOF);
+			}
+
+			switch (choice) {
+				case '1':
+					printf("Hart Send Resume Signal\n");
+					SBACCESS_32;
+					dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
+					dm_write(target, DM_SBDATA0, 0x40000001);
+
+					printf("Hart2 DM Status\n");
+					SBACCESS_32_READDATA_ADDR;
+					dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_STATUS));
+					dm_read(target, &sbdata, DM_SBDATA0);
+					//LOG_TARGET_DEBUG(target, "status %x", sbdata);
+					x = 25;
+					// Check for running
+					while((sbdata & (0x3 << 10)) == 0)
+					{
+						dm_read(target, &sbdata, DM_SBDATA0);
+						//LOG_TARGET_DEBUG(target, "status %x", sbdata);
+						printf("status %x\n", sbdata);
+						x--;
+						if (x == 0)
+						{
+							printf("Resume Failed!!!\n");
+							exit(0);
+						}
+					}
+					resume = true;
+					break;
+				case '2':
+					printf("\nExiting\n");
+					exit(0); // Exit the program
+				default:
+					printf("\nInvalid choice. Press any key to try again.\n");
+					getc(stdin);
+					break;
+			}
+			if (resume)
+			{
+				resume = false;
+				goto halt_menu;
+			}
+		}
+		else
+		{
+			halt_dump(target, hart_core_reg );
+			halt = false;
+		}
+	}
+	// // Uart NW0 dll
+	// SBACCESS_8_READADDR;
+	// dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART0 | UART_REG_LCR));
+	// sbdata = 0;
+	// dm_read(target, &sbdata, DM_SBDATA0);
+	// //LOG_TARGET_DEBUG(target, "uart_lcr %x", sbdata);
+	// printf("uart_lcr %x\n", sbdata);
+	// // look at dlab 
+	// sbdata |= SERIAL_LCR_DLAB;
+	// dm_write(target, DM_SBDATA0, sbdata);
+	// dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART0 | UART_REG_DLL));
+	// dm_read(target, &sbdata, DM_SBDATA0);
+	// //LOG_TARGET_DEBUG(target, "uart_dll1 %x", sbdata);
+	// printf("uart_dll1 %x\n", sbdata);
 
 
+	dm->was_reset = true;
+
+	exit(0);
+	return ERROR_OK;
+}
+
+void halt_dump(struct target *target, uint32_t hart_core_reg )
+{
+
+	uint32_t sbaccess_reg;
+	uint32_t sbdata = 0;
+	volatile int x;
 	//LOG_TARGET_DEBUG(target, "Hart Send Halt Signal");
 	printf("Hart Send Halt Signal\n");
 	SBACCESS_32;
@@ -2681,7 +2771,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_STATUS));
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "status %x", sbdata);
-	x = 120;
+	x = 25;
 
 	while((sbdata & (0x3 << 8)) == 0)
 	{
@@ -2690,7 +2780,10 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 		printf("status %x\n", sbdata);
 		x--;
 		if (x == 0)
-			break;
+		{
+			printf("Halt Failed\n");
+			exit(0);
+		}
 	}
 
 	// We are halted now
@@ -3348,29 +3441,6 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	dm_read(target, &sbdata, DM_SBDATA0);
 	//LOG_TARGET_DEBUG(target, "s11 upper %x", sbdata);	
 	printf("s11 upper %x\n", sbdata);
-
-	// // Uart NW0 dll
-	// SBACCESS_8_READADDR;
-	// dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART0 | UART_REG_LCR));
-	// sbdata = 0;
-	// dm_read(target, &sbdata, DM_SBDATA0);
-	// //LOG_TARGET_DEBUG(target, "uart_lcr %x", sbdata);
-	// printf("uart_lcr %x\n", sbdata);
-	// // look at dlab 
-	// sbdata |= SERIAL_LCR_DLAB;
-	// dm_write(target, DM_SBDATA0, sbdata);
-	// dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART0 | UART_REG_DLL));
-	// dm_read(target, &sbdata, DM_SBDATA0);
-	// //LOG_TARGET_DEBUG(target, "uart_dll1 %x", sbdata);
-	// printf("uart_dll1 %x\n", sbdata);
-
-
-	dm->was_reset = true;
-
-	exit(0);
-	return ERROR_OK;
-
-
 }
 
 static int examine_dm(struct target *target)
@@ -3462,7 +3532,6 @@ static int examine_dm(struct target *target)
 	dm->was_examined = true;
 	return ERROR_OK;
 }
-
 
 static int examine(struct target *target)
 {
