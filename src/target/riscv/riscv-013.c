@@ -1906,11 +1906,20 @@ static int reset_dm(struct target *target)
 
 	LOG_TARGET_DEBUG(target, "DM successfully reset.");
 
+	// OpenOCD ends here and InspireSemi Hack starts
+
 	// Read from masked rom?
 	#define MASKEDROM_UPPER 0x27fe40
 	#define MASKEDROM_LWR 0x00040000
 	#define MSKROM_MAIN	0x000417E4
 	#define THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0         0x0000000020000000UL
+	#define THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_1         0x0000000024000000UL
+	#define THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_2         0x0000000028000000UL
+
+	#define THUNDERBIRD_CORE_SRAM_BASE_ADDRESS_0             0x0000000000000000UL
+	#define THUNDERBIRD_CORE_SRAM_BASE_ADDRESS_1             0x0000000004000000UL
+	#define THUNDERBIRD_CORE_SRAM_BASE_ADDRESS_2             0x0000000008000000UL
+	
 	#define THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET              0x6E38UL    // Clock/Reset Control Register offset
 	#define THUNDERBIRD_CORE_CLKRST_CTRL_CLK_ENABLE_BIT_0       (1U << 0)  // Bit 0: Clock enable
 	#define THUNDERBIRD_CORE_CLKRST_CTRL_RESET_STROBE_BIT_1     (1U << 1)  // Bit 1: Reset strobe
@@ -2010,6 +2019,7 @@ static int reset_dm(struct target *target)
 	LOG_TARGET_DEBUG(target, "maskrom_data2 %x", sbdata);
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "maskrom_data3 %x", sbdata);
+	while(1);
 #endif
 
 #ifdef SRAM_READ
@@ -2086,6 +2096,7 @@ static int reset_dm(struct target *target)
 	sbdata = 0;
 	dm_write(target, DM_SBDATA0, 0x41);
 	LOG_TARGET_DEBUG(target, "wrote A to console");
+	while(1);
 #endif
 
 
@@ -2170,53 +2181,17 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
                                 THUNDERBIRD_CORE_CLKRST_CTRL_RESET_BIT_2_CONST | \
                                 THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST)    // Bits 0-3 set
 
-	//Release Hart2
-	SBACCESS_64;
-	sbdata = 0;
-	//LOG_TARGET_DEBUG(target, "Releasing Hart 2");
-	//printf("Releasing Hart 2\n");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
-	sbdata = COLD_RESET1_RELEASE;
-	dm_write(target, DM_SBDATA1, 0x00);
-	dm_write(target, DM_SBDATA0, sbdata);
-	volatile int x;
-	for (x=0; x<0x100; x++);
-	sbdata = COLD_RESET2_RELEASE;
-	dm_write(target, DM_SBDATA1, 0x00);
-	dm_write(target, DM_SBDATA0, sbdata);
-
-	//LOG_TARGET_DEBUG(target, "Hart 2 Released");
-	//printf("Hart 2 Released\n");
-
-	SBACCESS_64_READADDR;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | THUNDERBIRD_CORE_MTIME_OFFSET));
-	sbdata = 0;
-	dm_read(target, &sbdata, DM_SBDATA1);
-	//LOG_TARGET_DEBUG(target, "hart2 mtime_upper %x", sbdata);
-	//printf("hart2 mtime_upper %x\n", sbdata);
-	dm_read(target, &sbdata, DM_SBDATA0);
-	//LOG_TARGET_DEBUG(target, "hart2 mtime_lower %x", sbdata);
-	//printf("hart2 mtime_lower %x\n", sbdata);
-
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | THUNDERBIRD_CORE_REGISTER_OFFSET | THUNDERBIRD_CORE_MTIME_OFFSET));
-	sbdata = 0;
-	dm_read(target, &sbdata, DM_SBDATA1);
-	//LOG_TARGET_DEBUG(target, "hart2 mtime_upper %x", sbdata);
-	//printf("hart2 mtime_upper %x\n", sbdata);
-	dm_read(target, &sbdata, DM_SBDATA0);
-	//LOG_TARGET_DEBUG(target, "hart2 mtime_lower %x", sbdata);
-	//printf("hart2 mtime_lower %x\n", sbdata);
-
+	uint32_t hart; // Read from parameter file
 	FILE *inputfile;
 	char fname[25];
 	char flashname[25];
 	uint32_t load, param, stack,  sptr;
 	uint32_t flash;
 	uint32_t flash_addr;
-	char flash_name[25];
+	const char *flash_name = "qspi_jtag.bin";
 	char label_buffer[100]; // Buffer to temporarily store the labels
-	uint32_t flash_sz;
 	uint32_t flash_args;
+	uint32_t minimal; // Flag to tell which parameter file to use. 
 
 	printf("Using Param file %s\n", param_file);
 	
@@ -2228,6 +2203,9 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	}
 
 	// Read the parameters using fscanf	
+	if (fscanf(inputfile, "%s = %x", label_buffer, &minimal) != 2) {
+		fprintf(stderr, "Error reading filename\n");
+	}
 	// is this a program a flash device?
 	if (fscanf(inputfile, "%s = %x", label_buffer, &flash) != 2) {
 		fprintf(stderr, "Error reading filename\n");
@@ -2236,46 +2214,66 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	if (fscanf(inputfile, "%s = %s", label_buffer, fname) != 2) {
 		fprintf(stderr, "Error reading filename\n");
 	}
-	// Flash Program Name
-	if (fscanf(inputfile, "%s = %s", label_buffer, flashname) != 2) {
-		fprintf(stderr, "Error reading filename\n");
+	if (minimal == 0) // read from file
+	{
+		// // Flash Program Name
+		// if (fscanf(inputfile, "%s = %s", label_buffer, flashname) != 2) {
+		// 	fprintf(stderr, "Error reading filename\n");
+		// }
+		// load addr
+		if (fscanf(inputfile, "%s = %x", label_buffer, &load) != 2) {
+			fprintf(stderr, "Error reading laod addr\n");
+		}
+		// param addr
+		if (fscanf(inputfile, "%s = %x", label_buffer, &param) != 2) {
+			fprintf(stderr, "Error reading param addr\n");
+		}
+		// stack addr
+		if (fscanf(inputfile, "%s = %x", label_buffer, &stack) != 2) {
+			fprintf(stderr, "Error reading stack addr\n");
+		}	
+		// status pointer
+		if (fscanf(inputfile, "%s = %x", label_buffer, &sptr) != 2) {
+			fprintf(stderr, "Error reading sptr addr\n");
+		}
+		// status pointer
+		if (fscanf(inputfile, "%s = %x", label_buffer, &hart) != 2) {
+			fprintf(stderr, "Error reading hartid addr\n");
+		}
 	}
-	// load addr
-	if (fscanf(inputfile, "%s = %x", label_buffer, &load) != 2) {
-		fprintf(stderr, "Error reading laod addr\n");
-	}
-	// param addr
-	if (fscanf(inputfile, "%s = %x", label_buffer, &param) != 2) {
-		fprintf(stderr, "Error reading param addr\n");
+	else // hardcode paramters minimal = 1
+	{
+		load = 0x2000;
+		param = 0x3A000;
+		stack = 0x3B000;
+		sptr =  0x3C000;
+		hart = 0x02;
 	}
 
-	// stack addr
-	if (fscanf(inputfile, "%s = %x", label_buffer, &stack) != 2) {
-		fprintf(stderr, "Error reading stack addr\n");
-	}	
-
-	// status pointer
-	if (fscanf(inputfile, "%s = %x", label_buffer, &sptr) != 2) {
-		fprintf(stderr, "Error reading sptr addr\n");
-	}
 	if(flash == 1)
 	{
-		// flash image addr
-		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_addr) != 2) {
-			fprintf(stderr, "Error reading load addr\n");
-		}
-		// Filename
-		if (fscanf(inputfile, "%s = %s", label_buffer, flash_name) != 2) {
+		// Filename	
+		if (fscanf(inputfile, "%s = %s", label_buffer, (char *)flash_name) != 2) {
 			fprintf(stderr, "Error reading filename\n");
 		}
-		// Args Pointer
-		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_args) != 2) {
-			fprintf(stderr, "Error reading file args\n");
+		
+		if (minimal == 0)
+		{
+			// flash image addr
+			if (fscanf(inputfile, "%s = %x", label_buffer, &flash_addr) != 2) {
+				fprintf(stderr, "Error reading load addr\n");
+			}
+			// Args Pointer
+			if (fscanf(inputfile, "%s = %x", label_buffer, &flash_args) != 2) {
+				fprintf(stderr, "Error reading file args\n");
+			}
 		}
-		// File Size
-		if (fscanf(inputfile, "%s = %x", label_buffer, &flash_sz) != 2) {
-			fprintf(stderr, "Error reading file size\n");
+		else 
+		{
+			flash_addr = 0x0000000004000000;
+			flash_args = 0x2D000;
 		}
+
 	}
 	else
 		flash_args = 0xDEADBEEF;
@@ -2283,20 +2281,57 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	// Close the file
 	fclose(inputfile);
 
-	// Print the read parameters (for verification)
-	// printf("Boot/App Name: %s\n", fname);
-	// printf("FlashProgram: %s\n", flashname);
-	// printf("load: %x\n", load);
-	// printf("param: %x\n", param);
-	// printf("stack: %x\n", stack);
-	// printf("sptr: %x\n", sptr);	
-	// if(flash == 1)	
-	// {
-	// 	printf("Flash File: %s\n", flash_name);
-	// 	printf("Flash Addr: %x\n", flash_addr);	
-	// 	printf("Flash Size: %x\n", flash_sz);
-	// 	printf("args: %x\n", flash_args);	
-	// }
+//Release Hart2
+	SBACCESS_64;
+	sbdata = 0;
+	uint32_t core_register_offset = (THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2));
+	printf("Releasing Hart %d@%lx\n", hart, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
+	sbdata = COLD_RESET1_RELEASE;
+	dm_write(target, DM_SBDATA1, 0x00);
+	dm_write(target, DM_SBDATA0, sbdata);
+	volatile int x;
+	for (x=0; x<0x100; x++);
+	sbdata = COLD_RESET2_RELEASE;
+	dm_write(target, DM_SBDATA1, 0x00);
+	dm_write(target, DM_SBDATA0, sbdata);
+
+	//LOG_TARGET_DEBUG(target, "Hart 2 Released");
+	printf("Hart %d Released\n", hart);
+
+	SBACCESS_64_READADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_MTIME_OFFSET));
+	sbdata = 0;
+	dm_read(target, &sbdata, DM_SBDATA1);
+	//LOG_TARGET_DEBUG(target, "hart2 mtime_upper %x", sbdata);
+	printf("hart mtime_upper %x\n", sbdata);
+	dm_read(target, &sbdata, DM_SBDATA0);
+	//LOG_TARGET_DEBUG(target, "hart2 mtime_lower %x", sbdata);
+	printf("hart mtime_lower %x\n", sbdata);
+
+	SBACCESS_64_READADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_MTIME_OFFSET));
+	sbdata = 0;
+	dm_read(target, &sbdata, DM_SBDATA1);
+	//LOG_TARGET_DEBUG(target, "hart2 mtime_upper %x", sbdata);
+	printf("hart mtime_upper %x\n", sbdata);
+	dm_read(target, &sbdata, DM_SBDATA0);
+	//LOG_TARGET_DEBUG(target, "hart2 mtime_lower %x", sbdata);
+	printf("hart mtime_lower %x\n", sbdata);
+
+	//Print the read parameters (for verification)
+	printf("Boot/App Name: %s\n", fname);
+	printf("FlashProgram: %s\n", flashname);
+	printf("load: %x\n", load);
+	printf("param: %x\n", param);
+	printf("stack: %x\n", stack);
+	printf("sptr: %x\n", sptr);	
+	if(flash == 1)	
+	{
+		printf("Flash File: %s\n", flash_name);
+		printf("Flash Addr: %x\n", flash_addr);	
+		printf("args: %x\n", flash_args);	
+	}
 
 
 
@@ -2381,7 +2416,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	{
 		dm_read(target, &sbdata, DM_SBDATA0);
 		//LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);
-		//printf("sram  %x word %x\n", sbdata, y);			
+		printf("sram  %x word %x\n", sbdata, y);			
 	}
 
 	free(buffer);
@@ -2476,8 +2511,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 		free(buffer);
 
-		// printf("Filelen = %lx\n", fileLen);
-		// printf("Filelen = %x\n", flash_sz);
+		printf("Filelen = %lx\n", fileLen);
 
 		SBACCESS_64;
 		dm_write(target, DM_SBADDRESS1, 0x00);
@@ -2544,6 +2578,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 #define DPC			0x7B1
 #define DCSR		0x7B0
 #define MSTATUS		0x300
+#define MSCRATCH	0x340
 #define MIE			0x304
 #define MTVEC		0x305
 #define MEPC		0x341
@@ -2582,15 +2617,38 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 #define HART_GP			0x1003
 #define HART_TP			0x1004
 
-
-	uint32_t hart = 2;
-	uint32_t hart_core_reg = THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2);
+	uint32_t hart_core_reg;
+	uint32_t hartid_core_reg = THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2);
+	int hart2dm_cnt = 0x100;
 
 	//LOG_TARGET_DEBUG(target, "Hart Enable DM");
 	//printf("Hart Enable DM\n");
 	SBACCESS_32;
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hartid_core_reg | DM_OFFSET | DM_CONTROL));
 	dm_write(target, DM_SBDATA0, 0x0001);
+
+	SBACCESS_32_READDATA;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hartid_core_reg | DM_OFFSET | DM_CONTROL));
+	dm_read(target, &sbdata, DM_SBDATA0); // Dummy read to prime pump
+
+	while(1)
+	{
+		dm_read(target, &sbdata, DM_SBDATA0);
+		if (sbdata & 0x001) // check if DM has come out of reset.
+			break;
+		else	
+			hart2dm_cnt--;
+		if (hart2dm_cnt == 0)
+			break;
+	}
+
+	if (hart2dm_cnt == 0)
+	{
+		printf("**********************************************************\n");
+		printf("Hart %x DM Failed to come out of reset properly\n", hart);
+		printf("**********************************************************\n");
+		exit(0);
+	}
 
 	//SBACCESS_32_READADDR;
 	//LOG_TARGET_DEBUG(target, "Hart DM next_dm");	
@@ -2610,8 +2668,8 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	SBACCESS_32;
 	sbdata = 0;
 	//LOG_TARGET_DEBUG(target, "SWIRQ to Hart2");
-	//printf("SWIRQ to Hart2\n");
-	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | THUNDERBIRD_CORE_SW_IRQ_OFFSET));
+	printf("SWIRQ to Hart %x\n", hart);
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hartid_core_reg | THUNDERBIRD_CORE_SW_IRQ_OFFSET));
 	dm_write(target, DM_SBDATA0, param);
 
 	// dm_read(target, &sbaccess_reg, DM_SBCS);
@@ -2621,6 +2679,10 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	char choice;
 	bool halt = false;
 	bool resume = false;
+	long long int address;
+	unsigned int range;
+	unsigned int a;
+	uint32_t hartid = 0;
 
 halt_menu:
 
@@ -2633,8 +2695,9 @@ halt_menu:
 	{
 		while (1) {
 			printf("--- Halt Menu ---\n");
-			printf("1. Halt Core 2\n");
-			printf("2. Exit\n");
+			printf("1 Halt Core %d\n", hart);
+			printf("2 Halt Core <X>\n");
+			printf("3 Exit\n");
 			printf("Enter your choice: ");
 
 			choice = getc(stdin);
@@ -2647,10 +2710,37 @@ halt_menu:
 
 			switch (choice) {
 				case '1':
-					printf("\nHalting Hart2\n");
+					printf("\nHalting Hart %d\n", hart);
+					hart_core_reg = THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2);
 					halt = true;
 					break;
 				case '2':
+					printf("Enter HartID to Halt: Range <2 - 13fe>:\n");
+    				if (scanf("%x", &hartid) == 1) {
+        					printf("You entered: %x\n", hartid);
+							if(hartid%2 == 1)
+							{
+								printf("HartID must be even number\n");
+								break;
+							}
+
+							// Consume the newline character left in the buffer after pressing Enter
+							if (choice != EOF && choice != '\n') {
+								// Read and ignore any remaining characters on the line
+								while (getc(stdin) != '\n' && choice != EOF);
+							}
+
+							hart_core_reg = THUNDERBIRD_CORE_REGISTER_OFFSET * (hartid/2);
+							// Enable the DM we want to talk with
+							SBACCESS_32;
+							dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
+							dm_write(target, DM_SBDATA0, 0x0001);
+							halt = true;
+							break;
+    				} else {
+						break;
+					}
+				case '3':
 					printf("\nExiting\n");
 					exit(0); // Exit the program
 				default:
@@ -2668,8 +2758,12 @@ halt_menu:
 		if (halt == false)
 		{
 			printf("--- Resume Menu ---\n");
-			printf("1. Resume Core 2\n");
-			printf("2. Exit\n");
+			if(hartid == 0)
+				printf("1 Resume Core %d\n", hart);
+			else
+				printf("1 Resume HarttID %x\n", hartid);
+			printf("2 Dump Memory\n");
+			printf("3 Exit\n");
 			printf("Enter your choice: ");
 
 			choice = getc(stdin);
@@ -2682,12 +2776,18 @@ halt_menu:
 
 			switch (choice) {
 				case '1':
-					printf("Hart Send Resume Signal\n");
+					if(hartid == 0)
+						printf("Hart %d Send Resume Signal\n", hart);
+					else
+					{
+						printf("Hart %x Send Resume Signal\n", hartid);
+						hartid = 0; //reset hartid 
+					}
 					SBACCESS_32;
 					dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_CONTROL));
 					dm_write(target, DM_SBDATA0, 0x40000001);
 
-					printf("Hart2 DM Status\n");
+					printf("Hart DM Status\n");
 					SBACCESS_32_READDATA_ADDR;
 					dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_STATUS));
 					dm_read(target, &sbdata, DM_SBDATA0);
@@ -2707,8 +2807,36 @@ halt_menu:
 						}
 					}
 					resume = true;
-					break;
+					break;				
 				case '2':
+					printf("Enter Start Address in Hex: ");
+    				if (scanf("%llx", &address) == 1) {
+        					printf("You entered: %llx\n", address);
+    				} else {
+						break;
+    				}
+					printf("Enter Range to dump in Hex, Must be a multiple of 4: ");
+    				if (scanf("%x", &range) == 1) {
+        					printf("You entered: %x\n", range);
+    				} else {
+						break;
+    				}
+					SBACCESS_32_READDATA_INC;
+					dm_write( target, DM_SBADDRESS1, (uint32_t)((address & 0xFFFFFFFF00000000) >> 32) );
+					dm_write( target, DM_SBADDRESS0, (uint32_t)(address & 0xFFFFFFFF) );
+					dm_read(target, &sbdata, DM_SBDATA0); // Prime the pump 
+					for (a=0;a<range;a+=4)
+					{
+						dm_read(target, &sbdata, DM_SBDATA0);
+						printf("Address %llx : Data %x\n", (address+a), sbdata);
+					}
+					// Consume the newline character left in the buffer after pressing Enter
+					if (choice != EOF && choice != '\n') {
+						// Read and ignore any remaining characters on the line
+						while (getc(stdin) != '\n' && choice != EOF);
+					}
+					break;
+				case '3':
 					printf("\nExiting\n");
 					exit(0); // Exit the program
 				default:
@@ -2826,6 +2954,22 @@ void halt_dump(struct target *target, uint32_t hart_core_reg )
 	dm_read(target, &sbdata, DM_SBDATA0);
 	//LOG_TARGET_DEBUG(target, "dcsr upper %x", sbdata);
 	printf("dcsr upper %x\n", sbdata);
+
+	SBACCESS_32;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
+	dm_write(target, DM_SBDATA0, CMD_REG | CMD_64BIT | CMD_READ | CMD_TXFR | MSCRATCH );
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA0));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	//LOG_TARGET_DEBUG(target, "mstatus lwr %x", sbdata);
+	printf("mscratch lwr %x\n", sbdata);
+
+	SBACCESS_32_READDATA_ADDR;
+	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_DATA1));
+	dm_read(target, &sbdata, DM_SBDATA0);
+	//LOG_TARGET_DEBUG(target, "mstatus upper %x", sbdata);
+	printf("mscratch upper %x\n", sbdata);
 
 	SBACCESS_32;
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hart_core_reg | DM_OFFSET | DM_ABSTRACT_CMD));
