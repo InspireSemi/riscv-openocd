@@ -2184,11 +2184,11 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	uint32_t hart; // Read from parameter file
 	FILE *inputfile;
 	char fname[25];
-	char flashname[25];
+	char flash_name[25];
 	uint32_t load, param, stack,  sptr;
 	uint32_t flash;
 	uint32_t flash_addr;
-	const char *flash_name = "qspi_jtag.bin";
+	const char *flashname = "qspi_jtag.bin";
 	char label_buffer[100]; // Buffer to temporarily store the labels
 	uint32_t flash_args;
 	uint32_t minimal; // Flag to tell which parameter file to use. 
@@ -2216,13 +2216,9 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	}
 	if (minimal == 0) // read from file
 	{
-		// // Flash Program Name
-		// if (fscanf(inputfile, "%s = %s", label_buffer, flashname) != 2) {
-		// 	fprintf(stderr, "Error reading filename\n");
-		// }
 		// load addr
 		if (fscanf(inputfile, "%s = %x", label_buffer, &load) != 2) {
-			fprintf(stderr, "Error reading laod addr\n");
+			fprintf(stderr, "Error reading load addr\n");
 		}
 		// param addr
 		if (fscanf(inputfile, "%s = %x", label_buffer, &param) != 2) {
@@ -2285,7 +2281,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	SBACCESS_64;
 	sbdata = 0;
 	uint32_t core_register_offset = (THUNDERBIRD_CORE_REGISTER_OFFSET * (hart/2));
-	printf("Releasing Hart %d@%lx\n", hart, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
+	//printf("Releasing Hart %d@%lx\n", hart, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_CLKRST_CTRL_OFFSET));
 	sbdata = COLD_RESET1_RELEASE;
 	dm_write(target, DM_SBDATA1, 0x00);
@@ -2297,8 +2293,9 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	dm_write(target, DM_SBDATA0, sbdata);
 
 	//LOG_TARGET_DEBUG(target, "Hart 2 Released");
-	printf("Hart %d Released\n", hart);
+	//printf("Hart %d Released\n", hart);
 
+#ifdef INSPIREDBG
 	SBACCESS_64_READADDR;
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | core_register_offset | THUNDERBIRD_CORE_MTIME_OFFSET));
 	sbdata = 0;
@@ -2332,7 +2329,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 		printf("Flash Addr: %x\n", flash_addr);	
 		printf("args: %x\n", flash_args);	
 	}
-
+#endif
 
 
 	FILE *file;
@@ -2356,7 +2353,6 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 		fprintf(stderr, "Unable to open file");
 		exit(0);
 	}
-	
 	//Get file length
 	fseek(file, 0, SEEK_END);
 	fileLen=ftell(file);
@@ -2406,6 +2402,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 	}
 
+#ifdef INSPIREDBG	
 	SBACCESS_32_READDATA_INC;
 	dm_write(target, DM_SBADDRESS1, 0x00);
 	dm_write(target, DM_SBADDRESS0, load);
@@ -2418,6 +2415,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 		//LOG_TARGET_DEBUG(target, "sram  %x word %x", sbdata, y);
 		printf("sram  %x word %x\n", sbdata, y);			
 	}
+#endif
 
 	free(buffer);
 
@@ -2437,7 +2435,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 	if (flash == 1)
 	{
-		printf("Reading Flash File...\n");
+		printf("Reading FW Image to be Flashed...\n");
 		SBACCESS_32_INC;
 		//Open file
 		file = fopen(flash_name, "rb");
@@ -2511,7 +2509,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 
 		free(buffer);
 
-		printf("Filelen = %lx\n", fileLen);
+		//printf("Filelen = %lx\n", fileLen);
 
 		SBACCESS_64;
 		dm_write(target, DM_SBADDRESS1, 0x00);
@@ -2668,7 +2666,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	SBACCESS_32;
 	sbdata = 0;
 	//LOG_TARGET_DEBUG(target, "SWIRQ to Hart2");
-	printf("SWIRQ to Hart %x\n", hart);
+	//printf("SWIRQ to Hart %x\n", hart);
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_CORE_REGISTER_BASE_ADDRESS_0 | hartid_core_reg | THUNDERBIRD_CORE_SW_IRQ_OFFSET));
 	dm_write(target, DM_SBDATA0, param);
 
