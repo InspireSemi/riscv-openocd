@@ -2239,7 +2239,7 @@ static const uint32_t THUNDERBIRD_CORE_CLKRST_CTRL_SRAM_RESET_BIT_3_CONST = THUN
 	}
 	else // hardcode paramters minimal = 1
 	{
-		load = 0x2000;
+		load = 0x20000;
 		param = 0x3A000;
 		stack = 0x3B000;
 		sptr =  0x3C000;
@@ -2760,7 +2760,7 @@ halt_menu:
 				printf("1 Resume Core %d\n", hart);
 			else
 				printf("1 Resume HarttID %x\n", hartid);
-			printf("2 Dump Memory\n");
+			printf("2 Dump Address Range\n");
 			printf("3 Exit\n");
 			printf("Enter your choice: ");
 
