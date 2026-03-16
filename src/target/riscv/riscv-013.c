@@ -2908,7 +2908,8 @@ void halt_dump(struct target *target, uint32_t hart_core_reg )
 		if (x == 0)
 		{
 			printf("Halt Failed\n");
-			exit(0);
+			return;
+			//exit(0);
 		}
 	}
 
