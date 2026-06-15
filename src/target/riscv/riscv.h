@@ -20,7 +20,7 @@ struct riscv_program;
 #define RISCV_MAX_HARTS  ((int)BIT(20))
 #define RISCV_MAX_TRIGGERS 32
 #define RISCV_MAX_HWBPS 16
-#define RISCV_MAX_DMS 100
+#define RISCV_MAX_DMS  1536 //100  Increase to max # of cores on Thunderbird
 
 #define DEFAULT_COMMAND_TIMEOUT_SEC 5
 

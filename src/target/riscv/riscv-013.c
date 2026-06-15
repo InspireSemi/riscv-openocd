@@ -538,7 +538,7 @@ static bool check_dbgbase_exists(struct target *target)
 {
 	uint32_t next_dm = 0;
 	unsigned int count = 1;
-	riscv013_info_t *info = get_info(target);
+	//riscv013_info_t *info = get_info(target);
 
 	LOG_TARGET_DEBUG(target, "Searching for DM with DMI base address (dbgbase) = 0x%x", target->dbgbase);
 	while (1) {
@@ -553,12 +553,12 @@ static bool check_dbgbase_exists(struct target *target)
 			LOG_TARGET_ERROR(target, "Reached the end of DM chain (detected %u DMs in total).", count);
 			break;
 		}
-		if (next_dm >> info->abits) {
-			LOG_TARGET_ERROR(target, "The address of the next Debug Module does not fit into %u bits, "
-					"which is the width of the DMI bus address. This is a HW bug",
-					info->abits);
-			break;
-		}
+		// if (next_dm >> info->abits) {
+		// 	LOG_TARGET_ERROR(target, "The address of the next Debug Module does not fit into %u bits, "
+		// 			"which is the width of the DMI bus address. This is a HW bug",
+		// 			info->abits);
+		// 	break;
+		// }
 		/* Safety: Avoid looping forever in case of buggy nextdm values in the hardware. */
 		if (count++ > RISCV_MAX_DMS) {
 			LOG_TARGET_ERROR(target, "Supporting no more than %d DMs on a DMI bus. Aborting", RISCV_MAX_DMS);
@@ -1827,9 +1827,6 @@ static int wait_for_idle_if_needed(struct target *target)
 	return ERROR_OK;
 }
 
-#define RELEASE_HART2
-//#define SRAM_READ
-//#define HART_HALT
 
 extern char *param_file;
 void halt_dump(struct target *target, uint32_t hart_core_reg );
@@ -2004,6 +2001,10 @@ static int reset_dm(struct target *target)
 	uint32_t sbaccess_reg;
 	uint32_t sbdata = 0;
 
+//#define SRAM_READ
+//#define HART_HALT
+#define UART1_TEST
+
 #ifdef MASKED_ROM_READ
 	dm_read(target, &sbaccess_reg, DM_SBCS);
 	LOG_TARGET_DEBUG(target, "sbaccess_reg1 %x", sbaccess_reg);
@@ -2032,6 +2033,7 @@ static int reset_dm(struct target *target)
 	sbdata = 0;
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "sram_data1 %x", sbdata);
+	while(1);
 #endif
 
 #ifdef HART0_MTIME_READ
@@ -2055,13 +2057,13 @@ static int reset_dm(struct target *target)
 
 #ifdef UART1_TEST
 
-	uint32_t temp;
+	uint32_t temp2;
 
 	SBACCESS_8_READADDR;
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART1 | UART_REG_LCR));
 	sbdata = 0;
 	dm_read(target, &sbdata, DM_SBDATA0);
-	temp = sbdata;
+	temp2 = sbdata;
 	LOG_TARGET_DEBUG(target, "uart_lcr %x", sbdata);
 	// look at dlab 
 	sbdata |= SERIAL_LCR_DLAB;
@@ -2080,7 +2082,7 @@ static int reset_dm(struct target *target)
 	dm_read(target, &sbdata, DM_SBDATA0);
 	LOG_TARGET_DEBUG(target, "uart_dlm %x", sbdata);
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART1 | UART_REG_LCR));
-	dm_write(target, DM_SBDATA0, temp );
+	dm_write(target, DM_SBDATA0, temp2 );
 
 	// Clear out and reset fifos
 	dm_write(target, DM_SBADDRESS0, (THUNDERBIRD_NWUART1 | UART_REG_FCR));
@@ -2097,6 +2099,7 @@ static int reset_dm(struct target *target)
 	dm_write(target, DM_SBDATA0, 0x41);
 	LOG_TARGET_DEBUG(target, "wrote A to console");
 	while(1);
+	
 #endif
 
 
@@ -2133,7 +2136,7 @@ static int reset_dm(struct target *target)
 	LOG_TARGET_DEBUG(target, "next_dm %x", sbdata);
 #endif
 
-#ifdef  GPI1_READ
+#ifdef  GPIO1_READ
 	SBACCESS_32_READADDR;
 	dm_write(target, DM_SBADDRESS1, GPIO1_ADDR_UPPER);
 	dm_write(target, DM_SBADDRESS0, (GPIO1_ADDR_LWR | GPIO_PULL_EN_OFFSET));
